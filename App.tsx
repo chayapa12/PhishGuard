@@ -1,10 +1,8 @@
-
 import React, { useEffect, useState, useRef } from "react";
 import { Chart, ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend, DoughnutController, BarController } from "chart.js";
 import type { Chart as ChartJS } from "chart.js";
 import jsPDF from "jspdf";
 import { motion, AnimatePresence } from "framer-motion";
-import { GoogleGenAI, Type } from "@google/genai";
 
 Chart.register(DoughnutController, BarController, ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend);
 
@@ -15,6 +13,67 @@ interface Analysis {
   time: string;
   explanation?: string;
 }
+
+// --- ADVANCED OFFLINE ANALYSIS ENGINE ---
+interface OfflineAnalysisResult {
+  score: number;
+  explanation: string;
+}
+
+const analysisRules = [
+  // High-risk keywords (financial, credentials)
+  { weight: 20, regex: /\b(password|verify your account|ssn|social security|credit card|pin)\b/gi, reason: "Requests sensitive information (password, SSN, credit card)." },
+  { weight: 15, regex: /\b(bank|payment|invoice|suspicious activity|account locked)\b/gi, reason: "Uses financial or security-related language." },
+  
+  // Urgency and threats
+  { weight: 25, regex: /\b(urgent|immediate action required|account will be suspended|final warning|act now)\b/gi, reason: "Creates a sense of urgency or threat." },
+  { weight: 10, regex: /\b(limited time|offer expires)\b/gi, reason: "Pressures you with a limited-time offer." },
+  
+  // Suspicious links
+  { weight: 30, regex: /(bit\.ly|tinyurl|t\.co|goo\.gl|ow\.ly)/gi, reason: "Uses a URL shortener which can hide the true destination." },
+  { weight: 20, regex: /https?:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/gi, reason: "Contains a direct IP address link instead of a domain name." },
+  { weight: 15, regex: /\.([a-z]{2,})\//gi, reason: "Contains a link." }, // General link presence
+  { weight: 25, regex: /@\w+\.\w+\/|https?:\/\/[^\s]+\.[^\s]+\//gi, reason: "Contains an unusual link format." },
+
+
+  // Generic greetings and poor grammar
+  { weight: 10, regex: /dear (customer|user|valued member)/gi, reason: "Uses a generic greeting instead of your name." },
+  { weight: 5, regex: /\b(kindly|plese|verry|congratulation)\b/gi, reason: "Contains common spelling or grammatical errors." },
+  
+  // Unexpected prizes or attachments
+  { weight: 20, regex: /\b(you have won|prize|lottery|free gift|claim your reward)\b/gi, reason: "Promises an unexpected prize or reward." },
+  { weight: 15, regex: /\b(attachment|download|document)\b/gi, reason: "References an unsolicited attachment." },
+];
+
+function performOfflineAnalysis(text: string): OfflineAnalysisResult {
+  let score = 0;
+  const reasons: string[] = [];
+  const lowerCaseText = text.toLowerCase();
+
+  analysisRules.forEach(rule => {
+    if (rule.regex.test(lowerCaseText)) {
+      score += rule.weight;
+      if (!reasons.includes(rule.reason)) {
+        reasons.push(rule.reason);
+      }
+    }
+  });
+  
+  // Clamp score to 100
+  score = Math.min(score, 100);
+  
+  let explanation = "No major risks detected.";
+  if (reasons.length > 0) {
+    explanation = "This content is potentially risky for the following reasons: " + reasons.join(' ');
+  }
+  if (score > 80 && !reasons.some(r => r.includes("urgency"))) {
+      explanation += " It exhibits multiple characteristics of a phishing attempt."
+  }
+
+  return { score, explanation };
+}
+
+// --- UI COMPONENTS ---
 
 const glassEffectClasses = "bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] backdrop-blur-[8px] shadow-[0_6px_18px_rgba(2,6,23,0.6)]";
 
@@ -33,7 +92,6 @@ export default function App(): React.ReactElement {
   
   const pieChartRef = useRef<ChartJS | null>(null);
   const barChartRef = useRef<ChartJS | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const latest = history.length > 0 ? history[history.length - 1] : null;
 
   useEffect(() => {
@@ -102,29 +160,13 @@ export default function App(): React.ReactElement {
     });
   }, [history]);
 
-  const analyzeText = async () => {
+  const analyzeText = () => {
     if (!input.trim()) return alert("Please enter text or URL to analyze.");
     setIsLoading(true);
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `Analyze the following text for phishing risks: "${input}". Provide your analysis in a JSON object with two keys: "score" (a number from 0 to 100, where 100 is highest risk) and "explanation" (a brief string explaining the reasoning for the score).`,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              score: { type: Type.NUMBER, description: "Phishing risk score from 0-100" },
-              explanation: { type: Type.STRING, description: "Explanation for the score" },
-            },
-            required: ['score', 'explanation'],
-          },
-        },
-      });
 
-      const result = JSON.parse(response.text);
-      const { score, explanation } = result;
+    // Simulate analysis time
+    setTimeout(() => {
+      const { score, explanation } = performOfflineAnalysis(input);
       const label = score > 60 ? "High Risk 🔴" : score > 30 ? "Medium Risk 🟠" : "Low Risk 🟢";
       const entry: Analysis = { 
         text: input, 
@@ -135,69 +177,12 @@ export default function App(): React.ReactElement {
       };
       setHistory(prev => [...prev, entry]);
       setInput("");
-    } catch (error) {
-      console.error("Error analyzing text:", error);
-      alert("Failed to analyze the text. Please check the console for details. Make sure your API key is configured correctly.");
-    } finally {
       setIsLoading(false);
-    }
+    }, 500); // A small delay to make the loading state visible
   };
-
-  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setIsLoading(true);
-    try {
-      const base64Data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const imagePart = { inlineData: { mimeType: file.type, data: base64Data } };
-      const textPart = {
-        text: `Analyze the text content of this image for phishing risks. Provide your analysis in a JSON object with two keys: "score" (a number from 0 to 100, where 100 is highest risk) and "explanation" (a brief string explaining the reasoning for the score). If there is no text in the image, return a score of 0 and explanation "No text found in image.".`,
-      };
-      
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: { parts: [imagePart, textPart] },
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              score: { type: Type.NUMBER, description: "Phishing risk score from 0-100" },
-              explanation: { type: Type.STRING, description: "Explanation for the score" },
-            },
-            required: ['score', 'explanation'],
-          },
-        },
-      });
-
-      const result = JSON.parse(response.text);
-      const { score, explanation } = result;
-      const label = score > 60 ? "High Risk 🔴" : score > 30 ? "Medium Risk 🟠" : "Low Risk 🟢";
-      const entry: Analysis = { 
-        text: `[Image Analysis of ${file.name}]`, 
-        score, 
-        label, 
-        time: new Date().toLocaleString(),
-        explanation
-      };
-      setHistory(prev => [...prev, entry]);
-    } catch (error) {
-      console.error("Error analyzing image:", error);
-      alert("Failed to analyze the image. Please check the console for details. Make sure your API key is configured correctly.");
-    } finally {
-      setIsLoading(false);
-      if(fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
-    }
+  
+  const handleImageUploadClick = () => {
+    alert("Image analysis requires an online AI model and is not available in this offline version of PhishGuard.");
   };
 
   const clearHistory = () => {
@@ -211,12 +196,12 @@ export default function App(): React.ReactElement {
     if (!history.length) return alert("No history to generate a report.");
     const doc = new jsPDF();
     doc.setFontSize(18);
-    doc.text("PhishGuard AI - Analysis Report", 14, 22);
+    doc.text("PhishGuard - Offline Analysis Report", 14, 22);
     doc.setFontSize(11);
     doc.text(`Report generated on: ${new Date().toLocaleString()}`, 14, 30);
     let yPos = 40;
     history.forEach((h, i) => {
-      if (yPos > 260) { // Adjusted yPos limit
+      if (yPos > 260) {
         doc.addPage();
         yPos = 20;
       }
@@ -248,7 +233,7 @@ export default function App(): React.ReactElement {
           className="text-center mb-8"
         >
           <h1 className="text-4xl md:text-5xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-indigo-500 pb-2">PhishGuard</h1>
-          <p className="text-gray-300 mt-2 text-base md:text-lg">Welcome to PhishGuard</p>
+          <p className="text-gray-300 mt-2 text-base md:text-lg">Your Powerful Offline Phishing Analyzer</p>
         </motion.header>
 
         <main className="grid lg:grid-cols-5 gap-6">
@@ -264,18 +249,11 @@ export default function App(): React.ReactElement {
                 disabled={isLoading}
               />
               <div className="flex flex-wrap gap-3 mt-4">
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  onChange={handleImageUpload} 
-                  accept="image/*" 
-                  style={{ display: 'none' }} 
-                />
                 <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={analyzeText} disabled={isLoading || !input.trim()} className="bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors px-5 py-2 rounded-lg font-semibold shadow-lg shadow-cyan-500/20">
                   {isLoading ? "Analyzing..." : "Analyze Text"}
                 </motion.button>
-                <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={() => fileInputRef.current?.click()} disabled={isLoading} className="bg-indigo-500 hover:bg-indigo-400 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors px-5 py-2 rounded-lg font-semibold shadow-lg shadow-indigo-500/20">
-                  {isLoading ? "Analyzing..." : "Upload Image"}
+                <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={handleImageUploadClick} disabled={isLoading} className="bg-indigo-500 hover:bg-indigo-400 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors px-5 py-2 rounded-lg font-semibold shadow-lg shadow-indigo-500/20">
+                  Upload Image
                 </motion.button>
                 <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={() => setInput("")} disabled={isLoading} className="bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 transition-colors px-5 py-2 rounded-lg">Clear Input</motion.button>
               </div>
