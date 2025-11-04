@@ -5,8 +5,8 @@ import jsPDF from "jspdf";
 import { motion, AnimatePresence } from "framer-motion";
 
 // TypeScript declarations for CDN libraries
-declare const tf: any;
 declare const Tesseract: any;
+declare const tf: any; // TensorFlow.js
 declare const QRious: any;
 
 Chart.register(DoughnutController, BarController, ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend);
@@ -19,245 +19,380 @@ interface Analysis {
   explanation?: string;
 }
 
-// --- ANALYSIS ENGINE V1: HEURISTICS (FALLBACK) ---
-interface HeuristicAnalysisResult {
-  score: number;
-  explanation: string;
+// --- ADVANCED HEURISTIC ANALYSIS ENGINE V3 ---
+interface AnalysisRule {
+  id: string;
+  category: 'Urgency' | 'Financial' | 'Authority' | 'Suspicious Links' | 'Generic Greeting' | 'Bad Grammar' | 'Unexpected Reward' | 'Threat' | 'Unexpected Attachment' | 'Psychological Tricks';
+  weight: number;
+  regex: RegExp;
+  reason: string;
 }
 
-const analysisRules = [
-  { weight: 20, regex: /\b(password|verify your account|ssn|social security|credit card|pin)\b/gi, reason: "Requests sensitive information (password, SSN, credit card)." },
-  { weight: 15, regex: /\b(bank|payment|invoice|suspicious activity|account locked)\b/gi, reason: "Uses financial or security-related language." },
-  { weight: 25, regex: /\b(urgent|immediate action required|account will be suspended|final warning|act now)\b/gi, reason: "Creates a sense of urgency or threat." },
-  { weight: 10, regex: /\b(limited time|offer expires)\b/gi, reason: "Pressures you with a limited-time offer." },
-  { weight: 30, regex: /(bit\.ly|tinyurl|t\.co|goo\.gl|ow\.ly)/gi, reason: "Uses a URL shortener which can hide the true destination." },
-  { weight: 20, regex: /https?:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/gi, reason: "Contains a direct IP address link instead of a domain name." },
-  { weight: 25, regex: /@\w+\.\w+\/|https?:\/\/[^\s]+\.[^\s]+\//gi, reason: "Contains an unusual link format." },
-  { weight: 10, regex: /dear (customer|user|valued member)/gi, reason: "Uses a generic greeting instead of your name." },
-  { weight: 5, regex: /\b(kindly|plese|verry|congratulation)\b/gi, reason: "Contains common spelling or grammatical errors." },
-  { weight: 20, regex: /\b(you have won|prize|lottery|free gift|claim your reward)\b/gi, reason: "Promises an unexpected prize or reward." },
-  { weight: 15, regex: /\b(attachment|download|document)\b/gi, reason: "References an unsolicited attachment." },
+const advancedAnalysisRules: AnalysisRule[] = [
+    // Urgency
+    { id: 'URGENCY_1', category: 'Urgency', weight: 25, regex: /\b(urgent|immediate action required|act now|expiring soon|final warning)\b/gi, reason: "Creates a false sense of urgency to rush you into making a mistake." },
+    { id: 'URGENCY_2', category: 'Urgency', weight: 15, regex: /\b(limited time|offer expires|today only)\b/gi, reason: "Pressures you with a time-sensitive deadline." },
+    // Financial
+    { id: 'FINANCIAL_1', category: 'Financial', weight: 20, regex: /\b(payment|invoice|wire transfer|refund|unusual transaction)\b/gi, reason: "Mentions financial transactions to get your attention." },
+    { id: 'FINANCIAL_2', category: 'Financial', weight: 25, regex: /\b(credit card|bank account|ssn|social security|pin)\b/gi, reason: "Asks for highly sensitive financial or personal information." },
+    // Authority / Impersonation
+    { id: 'AUTHORITY_1', category: 'Authority', weight: 15, regex: /\b(verify your account|account confirmation|validate your details)\b/gi, reason: "Impersonates a legitimate service asking for verification." },
+    { id: 'AUTHORITY_2', category: 'Authority', weight: 10, regex: /\b(IT department|help desk|administrator)\b/gi, reason: "Claims to be from a technical support or authority figure." },
+    { id: 'AUTHORITY_3', category: 'Authority', weight: 20, regex: /\b(CEO|CFO|President|Manager)\b.*(urgent request|wire transfer|gift card)/gi, reason: "Impersonates a high-level executive to pressure you into making a financial transaction (CEO Fraud)." },
+    { id: 'AUTHORITY_4', category: 'Authority', weight: 15, regex: /\b(fedex|dhl|ups|usps|postal service)\b.*(delivery failed|shipping update|tracking number)/gi, reason: "Impersonates a well-known shipping company with a fake delivery notice." },
+    // Suspicious Links
+    { id: 'LINKS_1', category: 'Suspicious Links', weight: 35, regex: /(bit\.ly|tinyurl|t\.co|goo\.gl|ow\.ly)/gi, reason: "Uses a URL shortener to hide the real, potentially malicious, destination of the link." },
+    { id: 'LINKS_2', category: 'Suspicious Links', weight: 25, regex: /https?:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/gi, reason: "Links directly to an IP address instead of a trusted domain name." },
+    { id: 'LINKS_3', category: 'Suspicious Links', weight: 30, regex: /href\s*=\s*['"][^'"]*@/gi, reason: "Contains a link with an '@' symbol, a common trick to obscure the true domain." },
+    { id: 'LINKS_4', category: 'Suspicious Links', weight: 20, regex: /https?:\/\/[a-z0-9-]+\.(xyz|top|info|club|buzz|icu)\b/gi, reason: "Uses a top-level domain (.xyz, .top, etc.) often associated with spam or malicious sites." },
+    { id: 'LINKS_5', category: 'Suspicious Links', weight: 25, regex: /https?:\/\/([a-z0-9-]+\.){3,}/gi, reason: "Uses multiple subdomains, a technique to disguise a phishing domain as a legitimate one (e.g., yourbank.com.security.login.xyz)." },
+    // Generic Greeting
+    { id: 'GREETING_1', category: 'Generic Greeting', weight: 10, regex: /dear (customer|user|valued member|client)/gi, reason: "Uses a generic greeting. Legitimate companies usually use your name." },
+    // Bad Grammar
+    { id: 'GRAMMAR_1', category: 'Bad Grammar', weight: 5, regex: /\b(kindly|plese|verry|congratulationz|undeliverable)\b/gi, reason: "Contains common spelling or grammatical errors, often found in phishing emails." },
+    { id: 'GRAMMAR_2', category: 'Bad Grammar', weight: 5, regex: /\b[A-Z]{5,}\b/gi, reason: "Excessive use of capital letters, intended to create unnecessary urgency or importance." },
+    // Unexpected Reward
+    { id: 'REWARD_1', category: 'Unexpected Reward', weight: 20, regex: /\b(you have won|prize|lottery|free gift|claim your reward|inheritance)\b/gi, reason: "Promises an unexpected prize or reward to lure you into clicking." },
+    // Threat
+    { id: 'THREAT_1', category: 'Threat', weight: 25, regex: /\b(account locked|account suspended|suspicious activity|unauthorized access|security alert)\b/gi, reason: "Uses threats about your account security to cause panic." },
+    // Unexpected Attachment
+    { id: 'ATTACHMENT_1', category: 'Unexpected Attachment', weight: 20, regex: /\b(attachment|attached document|invoice attached|download the file)\b/gi, reason: "References an unexpected attachment, which could contain malware." },
+    // Psychological Tricks
+    { id: 'PSYCH_1', category: 'Psychological Tricks', weight: 15, regex: /\b(confidential|private|secret information)\b/gi, reason: "Tries to spark curiosity by mentioning secret or confidential information." },
 ];
 
-function performHeuristicAnalysis(text: string): HeuristicAnalysisResult {
-  let score = 0;
-  const reasons: string[] = [];
-  const lowerCaseText = text.toLowerCase();
+function performAdvancedHeuristicAnalysis(text: string): { score: number; foundFlags: { reason: string; category: string; id: string }[] } {
+    let score = 0;
+    const foundFlags: { reason: string; category: string; id: string }[] = [];
+    const foundCategories = new Set<string>();
+    const lowerCaseText = text.toLowerCase();
 
-  analysisRules.forEach(rule => {
-    if (rule.regex.test(lowerCaseText)) {
-      score += rule.weight;
-      if (!reasons.includes(rule.reason)) {
-        reasons.push(rule.reason);
-      }
+    advancedAnalysisRules.forEach(rule => {
+        if (rule.regex.test(lowerCaseText)) {
+            score += rule.weight;
+            if (!foundFlags.some(f => f.id === rule.id)) {
+                foundFlags.push({ reason: rule.reason, category: rule.category, id: rule.id });
+                foundCategories.add(rule.category);
+            }
+        }
+    });
+
+    // --- Contextual Combination Bonuses ---
+    if (foundCategories.has('Urgency') && foundCategories.has('Financial')) score += 20;
+    if (foundCategories.has('Threat') && foundCategories.has('Suspicious Links')) score += 25;
+    if (foundCategories.has('Authority') && foundCategories.has('Financial')) score += 25;
+    if (foundCategories.has('Authority') && foundCategories.has('Urgency')) score += 20;
+    if (foundCategories.has('Unexpected Attachment') && foundCategories.has('Urgency')) score += 15;
+    if (foundCategories.has('Threat') && foundCategories.has('Authority')) score += 20;
+
+    score = Math.min(score, 100);
+    return { score, foundFlags };
+}
+
+
+// --- ADVANCED OFFLINE MACHINE LEARNING ENGINE V2 ---
+const mlKeywords: { [key: string]: number } = {
+  // High-risk keywords
+  'verify': 0.9, 'password': 0.8, 'username': 0.7, 'ssn': 1.0, 'locked': 0.8, 'suspended': 0.8,
+  'unusual': 0.7, 'activity': 0.6, 'login': 0.7, 'confidential': 0.8, 'immediate': 0.8,
+  'action': 0.6, 'required': 0.7, 'winner': 0.9, 'prize': 0.9, 'congratulations': 0.8, 'free': 0.7,
+  'invoice': 0.7, 'payment': 0.8, 'refund': 0.7, 'inheritance': 0.9, 'kindly': 0.6, 'wire': 0.9, 'transfer': 0.8,
+  // Low-risk (negative weights)
+  'hello': -0.5, 'team': -0.4, 'update': -0.3, 'meeting': -0.6, 'report': -0.5, 'thanks': -0.7,
+  'sincerely': -0.8, 'documentation': -0.6, 'feedback': -0.5, 'reminder': -0.2,
+};
+
+const mlNgrams: { [key: string]: number } = {
+  // High-risk phrases
+  'verify your': 0.9, 'your account': 0.8, 'account is': 0.6, 'is locked': 0.9, 'action required': 0.8,
+  'immediate action': 0.9, 'click here': 0.7, 'update your': 0.7, 'credit card': 0.9,
+  'bank account': 0.9, 'dear customer': 0.6, 'social security': 1.0, 'final notice': 0.8
+};
+
+// Simulated model weights for offline inference
+const modelWeights = {
+    keywordScore: 1.2,
+    ngramScore: 1.5,
+    uppercaseRatio: 5.0, // High weight for excessive caps
+    symbolRatio: 3.0,
+    digitRatio: 1.5,
+    bias: -2.0 // Adjusts the activation threshold
+};
+
+interface MLFeatures {
+    keywordScore: number;
+    ngramScore: number;
+    uppercaseRatio: number;
+    symbolRatio: number;
+    digitRatio: number;
+    flaggedWords: string[];
+    flaggedNgrams: string[];
+}
+
+function extractMLFeatures(text: string): MLFeatures {
+    const lowerCaseText = text.toLowerCase();
+    const tokens = lowerCaseText.replace(/[.,!?;:"']/g, ' ').split(/\s+/);
+    const uniqueTokens = [...new Set(tokens)];
+    
+    let keywordScore = 0;
+    const flaggedWords: string[] = [];
+    uniqueTokens.forEach(token => {
+        if (mlKeywords[token]) {
+            keywordScore += mlKeywords[token];
+            if (mlKeywords[token] > 0.6) flaggedWords.push(token);
+        }
+    });
+
+    let ngramScore = 0;
+    const flaggedNgrams: string[] = [];
+    Object.keys(mlNgrams).forEach(ngram => {
+        if (lowerCaseText.includes(ngram)) {
+            ngramScore += mlNgrams[ngram];
+            flaggedNgrams.push(ngram);
+        }
+    });
+    
+    const textLength = text.length || 1;
+    const uppercaseRatio = (text.match(/[A-Z]/g) || []).length / textLength;
+    const symbolRatio = (text.match(/[!@#$%^&*()_+~`|}{[\]:;?><,.\/-=]/g) || []).length / textLength;
+    const digitRatio = (text.match(/[0-9]/g) || []).length / textLength;
+
+    return { keywordScore, ngramScore, uppercaseRatio, symbolRatio, digitRatio, flaggedWords, flaggedNgrams };
+}
+
+function runAdvancedMLAnalysis(text: string): { score: number; details: MLFeatures } {
+    if (!text) return { score: 0, details: { keywordScore: 0, ngramScore: 0, uppercaseRatio: 0, symbolRatio: 0, digitRatio: 0, flaggedWords: [], flaggedNgrams: [] } };
+    
+    const features = extractMLFeatures(text);
+
+    // Simulated Linear Model + Sigmoid Activation
+    const logit = (features.keywordScore * modelWeights.keywordScore) +
+                  (features.ngramScore * modelWeights.ngramScore) +
+                  (features.uppercaseRatio * modelWeights.uppercaseRatio) +
+                  (features.symbolRatio * modelWeights.symbolRatio) +
+                  (features.digitRatio * modelWeights.digitRatio) +
+                  modelWeights.bias;
+    
+    const probability = 1 / (1 + Math.exp(-logit));
+    const score = probability * 100;
+    
+    return { score: Math.min(score, 100), details: features };
+}
+
+function generateCombinedExplanation(
+    heuristicResult: { score: number; foundFlags: { reason: string; category: string; id: string }[] },
+    mlResult: { score: number; details: MLFeatures },
+    finalScore: number
+): string {
+    if (finalScore < 5) {
+        return "Overall Assessment: Low Risk\n\nOur analysis did not find any common phishing indicators. However, always remain cautious and verify unexpected requests through official channels.";
     }
-  });
-  
-  score = Math.min(score, 100);
-  
-  let explanation = "No major risks detected based on standard text analysis.";
-  if (reasons.length > 0) {
-    explanation = "This content is potentially risky for the following reasons: " + reasons.join(' ');
-  }
-  return { score, explanation: `[Standard Heuristic Engine] ${explanation}` };
-}
 
+    let explanation = `Overall Assessment: ${finalScore > 60 ? 'High Risk' : finalScore > 30 ? 'Medium Risk' : 'Low Risk'}\n\nThis content exhibits characteristics of a phishing attempt. We advise caution.\n\n`;
 
-// --- ANALYSIS ENGINE V2: DEEP LEARNING (PRIMARY) ---
-async function preprocessText(text: string): Promise<any> {
-    const sequenceLength = 200; 
-    const vocabulary = { '<PAD>': 0, '<START>': 1, 'hello': 2, 'world': 3 };
-    const tokens = text.toLowerCase().split(/\s+/).map(word => vocabulary[word] || 0);
-    const padded = tokens.slice(0, sequenceLength).concat(Array(Math.max(0, sequenceLength - tokens.length)).fill(0));
-    return tf.tensor2d([padded]);
-}
+    if (heuristicResult.foundFlags.length > 0) {
+        explanation += "Heuristic Analysis (Rule-Based Detections):\n";
+        const flagsByCategory: { [key: string]: string[] } = {};
+        heuristicResult.foundFlags.forEach(flag => {
+            if (!flagsByCategory[flag.category]) flagsByCategory[flag.category] = [];
+            flagsByCategory[flag.category].push(flag.reason);
+        });
+        Object.keys(flagsByCategory).forEach(category => {
+            explanation += `• [${category}]\n`;
+            flagsByCategory[category].forEach(reason => {
+                explanation += `  - ${reason}\n`;
+            });
+        });
+    }
 
-function preprocessImage(imgElement: HTMLImageElement): any {
-    const imageSize = 128;
-    return tf.browser.fromPixels(imgElement)
-        .resizeNearestNeighbor([imageSize, imageSize])
-        .toFloat()
-        .div(tf.scalar(255.0))
-        .expandDims(0);
+    const mlDetails = mlResult.details;
+    if (mlDetails.flaggedWords.length > 0 || mlDetails.flaggedNgrams.length > 0 || mlResult.score > 20) {
+        explanation += "\nMachine Learning Analysis (Linguistic & Structural Cues):\n";
+        if (mlDetails.flaggedNgrams.length > 0) {
+            explanation += `  - Detected suspicious phrases: ${mlDetails.flaggedNgrams.slice(0, 3).join(', ')}.\n`;
+        }
+        if (mlDetails.flaggedWords.length > 0) {
+            explanation += `  - Identified high-risk keywords: ${mlDetails.flaggedWords.slice(0, 4).join(', ')}.\n`;
+        }
+        if (mlDetails.uppercaseRatio > 0.1) {
+            explanation += `  - Noticed an unusually high amount of capital letters, a common tactic to create false urgency.\n`;
+        }
+        if (mlDetails.symbolRatio > 0.05) {
+            explanation += `  - Detected an unusual density of symbols, which can be used to obscure text.\n`;
+        }
+    }
+    
+    explanation += "\nRecommendation:\n";
+    if (finalScore > 60) {
+         explanation += "DO NOT click any links, download attachments, or reply. Delete this message immediately. If you are concerned about an account, log in through an official website or app you trust, not through any links provided in this message.";
+    } else if (finalScore > 30) {
+        explanation += "This content has some suspicious elements. Be very careful before proceeding. Double-check the sender's identity and independently verify any requests before taking action.";
+    } else {
+        explanation += "While the risk score is low, one or more potential issues were flagged. It's always best to be cautious with unsolicited messages.";
+    }
+    
+    return explanation;
 }
 
 
 // --- UI & STYLING ---
 const glassEffectClasses = "bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] backdrop-blur-[8px] shadow-[0_6px_18px_rgba(2,6,23,0.6)]";
-const tabButtonClasses = "px-4 py-2 rounded-lg font-semibold transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-cyan-400";
-const activeTabClasses = "bg-cyan-500 text-white shadow-lg shadow-cyan-500/30";
-const inactiveTabClasses = "bg-slate-700/50 hover:bg-slate-600/70 text-gray-300";
 
-
-// --- NEW TOOLKIT COMPONENTS ---
-
-const PasswordToolkit: React.FC = () => {
+// --- SECURITY TOOLKIT COMPONENTS ---
+const PasswordGenerator: React.FC = () => {
     const [password, setPassword] = useState('');
-    const [generatedPassword, setGeneratedPassword] = useState('');
-    const [options, setOptions] = useState({ length: 16, numbers: true, symbols: true, uppercase: true });
-    const [strength, setStrength] = useState({ score: 0, feedback: 'Enter a password to test' });
-
-    useEffect(() => {
-        if (!password) {
-            setStrength({ score: 0, feedback: 'Enter a password to test' });
-            return;
-        }
-        let score = 0;
-        const feedbackItems = [];
-        if (password.length >= 8) score += 25; else feedbackItems.push('Too short');
-        if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score += 25; else feedbackItems.push('Needs uppercase & lowercase');
-        if (/\d/.test(password)) score += 25; else feedbackItems.push('Needs numbers');
-        if (/[^A-Za-z0-9]/.test(password)) score += 25; else feedbackItems.push('Needs symbols');
-        
-        setStrength({ score, feedback: feedbackItems.length > 0 ? `Weak: ${feedbackItems.join(', ')}.` : 'Strong password!' });
-    }, [password]);
+    const [length, setLength] = useState(16);
+    const [options, setOptions] = useState({ uppercase: true, numbers: true, symbols: true });
+    const [copied, setCopied] = useState(false);
+    const [customChars, setCustomChars] = useState('');
+    const [memorablePhrase, setMemorablePhrase] = useState('');
 
     const generatePassword = useCallback(() => {
         const lower = 'abcdefghijklmnopqrstuvwxyz';
         const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
         const nums = '0123456789';
         const syms = '!@#$%^&*()_+~`|}{[]:;?><,./-=';
-        let charset = lower;
-        if (options.uppercase) charset += upper;
-        if (options.numbers) charset += nums;
-        if (options.symbols) charset += syms;
+        
+        let charPool = lower;
+        if (options.uppercase) charPool += upper;
+        if (options.numbers) charPool += nums;
+        if (options.symbols) charPool += syms;
+        
+        const uniqueCustomChars = [...new Set(customChars.split(''))].join('');
+        charPool += uniqueCustomChars;
+
+        if (!charPool) {
+            setPassword('Select character types!');
+            return;
+        }
 
         let newPassword = '';
-        const randomValues = new Uint32Array(options.length);
-        window.crypto.getRandomValues(randomValues);
-        for (let i = 0; i < options.length; i++) {
-            newPassword += charset[randomValues[i] % charset.length];
+        for (let i = 0; i < length; i++) {
+            newPassword += charPool.charAt(Math.floor(Math.random() * charPool.length));
         }
-        setGeneratedPassword(newPassword);
-    }, [options]);
+        setPassword(newPassword);
+    }, [length, options, customChars]);
+
+    const generateMemorablePassword = () => {
+        if (!memorablePhrase.trim()) {
+            alert("Please enter a word or phrase to make it strong.");
+            return;
+        }
+
+        let strongPass = memorablePhrase.replace(/\s+/g, '');
+        if (strongPass.length > 0) {
+            strongPass = strongPass.charAt(0).toUpperCase() + strongPass.slice(1);
+        }
+
+        const substitutions: { [key: string]: string } = { 'a': '@', 'e': '3', 'i': '!', 'o': '0', 's': '$', 't': '7' };
+        let passArray = strongPass.split('');
+        for (let i = 0; i < passArray.length; i++) {
+            const lowerChar = passArray[i].toLowerCase();
+            if (substitutions[lowerChar] && Math.random() > 0.6) {
+                passArray[i] = substitutions[lowerChar];
+            }
+        }
     
-    const strengthColor = strength.score < 50 ? 'bg-red-500' : strength.score < 100 ? 'bg-yellow-500' : 'bg-green-500';
+        const nums = '0123456789';
+        const syms = '!@#$%^&*?';
+        const numCount = Math.floor(Math.random() * 2) + 1;
+        const symCount = Math.floor(Math.random() * 2) + 1;
+
+        for(let i=0; i < numCount; i++) {
+            const randIndex = Math.floor(Math.random() * (passArray.length + 1));
+            const randomNumber = nums.charAt(Math.floor(Math.random() * nums.length));
+            passArray.splice(randIndex, 0, randomNumber);
+        }
+    
+        for(let i=0; i < symCount; i++) {
+            const randIndex = Math.floor(Math.random() * (passArray.length + 1));
+            const randomSymbol = syms.charAt(Math.floor(Math.random() * syms.length));
+            passArray.splice(randIndex, 0, randomSymbol);
+        }
+    
+        setPassword(passArray.join(''));
+    };
+
+    useEffect(() => {
+        generatePassword();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const copyToClipboard = () => {
+        navigator.clipboard.writeText(password);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
 
     return (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`p-5 rounded-2xl ${glassEffectClasses} space-y-6`}>
-            <div>
-                <h3 className="text-xl font-semibold text-cyan-200 mb-3">Password Strength Analyzer</h3>
-                <input type="text" value={password} onChange={e => setPassword(e.target.value)} placeholder="Type a password..." className="w-full p-3 rounded-lg bg-slate-800/60 border border-slate-700" />
-                <div className="w-full bg-slate-700 rounded-full h-2.5 mt-3">
-                    <div className={`${strengthColor} h-2.5 rounded-full transition-all duration-300`} style={{ width: `${strength.score}%` }}></div>
-                </div>
-                <p className="text-sm text-gray-300 mt-2">{strength.feedback}</p>
+        <motion.div layout className={`p-5 rounded-2xl ${glassEffectClasses} w-full`}>
+            <h3 className="text-xl font-semibold text-indigo-300 mb-4">Secure Password Generator</h3>
+            <div className={`flex items-center p-3 rounded-lg bg-slate-800/60 border border-slate-700 mb-4`}>
+                <span className="font-mono text-lg text-white flex-grow break-all">{password}</span>
+                <button onClick={copyToClipboard} className="ml-4 px-3 py-1 bg-indigo-500 rounded-md text-sm hover:bg-indigo-400 transition-colors">{copied ? 'Copied!' : 'Copy'}</button>
             </div>
-            <div>
-                <h3 className="text-xl font-semibold text-cyan-200 mb-3">Secure Password Generator</h3>
-                <div className="grid grid-cols-2 gap-4 items-center">
+            <div className="space-y-4">
+                 <div>
+                    <h4 className="font-semibold text-gray-300 mb-2">Random Password</h4>
                     <div>
-                        <label className="block text-sm">Length: {options.length}</label>
-                        <input type="range" min="8" max="32" value={options.length} onChange={e => setOptions(o => ({ ...o, length: parseInt(e.target.value) }))} className="w-full" />
+                        <label htmlFor="length" className="block text-sm text-gray-300 mb-1">Length: {length}</label>
+                        <input type="range" id="length" min="8" max="64" value={length} onChange={e => setLength(parseInt(e.target.value))} className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"/>
                     </div>
-                    <div className="space-y-2">
-                        <label className="flex items-center"><input type="checkbox" checked={options.uppercase} onChange={e => setOptions(o => ({...o, uppercase: e.target.checked}))} className="mr-2" /> Uppercase</label>
-                        <label className="flex items-center"><input type="checkbox" checked={options.numbers} onChange={e => setOptions(o => ({...o, numbers: e.target.checked}))} className="mr-2" /> Numbers</label>
-                        <label className="flex items-center"><input type="checkbox" checked={options.symbols} onChange={e => setOptions(o => ({...o, symbols: e.target.checked}))} className="mr-2" /> Symbols</label>
+                    <div className="flex flex-wrap gap-4 mt-3">
+                        {Object.keys(options).map(key => (
+                            <label key={key} className="flex items-center cursor-pointer">
+                                <input type="checkbox" checked={options[key as keyof typeof options]} onChange={() => setOptions(prev => ({ ...prev, [key]: !prev[key] }))} className="w-4 h-4 text-indigo-600 bg-gray-700 border-gray-600 rounded focus:ring-indigo-500"/>
+                                <span className="ml-2 text-gray-200 capitalize">{key}</span>
+                            </label>
+                        ))}
                     </div>
-                </div>
-                <button onClick={generatePassword} className="bg-indigo-500 px-4 py-2 rounded-md font-semibold mt-4">Generate</button>
-                {generatedPassword && (
-                    <div className="mt-4 bg-slate-800 p-3 rounded-lg flex justify-between items-center">
-                        <span className="font-mono break-all">{generatedPassword}</span>
-                        <button onClick={() => navigator.clipboard.writeText(generatedPassword)} title="Copy to clipboard" className="ml-4 p-2 rounded-md hover:bg-slate-700">📋</button>
-                    </div>
-                )}
+                     <div className="mt-3">
+                         <label htmlFor="customChars" className="block text-sm text-gray-300 mb-1">Include Custom Characters:</label>
+                         <input type="text" id="customChars" value={customChars} onChange={e => setCustomChars(e.target.value)} placeholder="e.g., #?&@" className="w-full p-2 rounded-lg bg-slate-800/60 border border-slate-700 text-white placeholder-gray-400 focus:ring-2 focus:ring-indigo-500"/>
+                     </div>
+                    <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={generatePassword} className="mt-3 bg-indigo-500 hover:bg-indigo-400 transition-colors px-5 py-2 rounded-lg font-semibold shadow-lg shadow-indigo-500/20">Regenerate</motion.button>
+                 </div>
+                 
+                 <hr className="border-slate-700" />
+
+                 <div>
+                    <h4 className="font-semibold text-gray-300 mb-2">Memorable Password</h4>
+                     <div>
+                         <label htmlFor="memorablePhrase" className="block text-sm text-gray-300 mb-1">Your word or phrase:</label>
+                         <input type="text" id="memorablePhrase" value={memorablePhrase} onChange={e => setMemorablePhrase(e.target.value)} placeholder="e.g., My dog is fluffy" className="w-full p-2 rounded-lg bg-slate-800/60 border border-slate-700 text-white placeholder-gray-400 focus:ring-2 focus:ring-indigo-500"/>
+                     </div>
+                    <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={generateMemorablePassword} disabled={!memorablePhrase.trim()} className="mt-3 bg-teal-500 hover:bg-teal-400 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors px-5 py-2 rounded-lg font-semibold shadow-lg shadow-teal-500/20">Make it Strong</motion.button>
+                 </div>
             </div>
         </motion.div>
     );
 };
 
-const QRCodeGenerator: React.FC = () => {
-    const [text, setText] = useState('');
-    const qrCanvasRef = useRef<HTMLCanvasElement>(null);
-    
+const QrCodeGenerator: React.FC = () => {
+    const [text, setText] = useState('https://google.com');
+    const qrRef = useRef<HTMLCanvasElement>(null);
+
     useEffect(() => {
-        if (qrCanvasRef.current && text) {
+        if (qrRef.current && text) {
             new QRious({
-                element: qrCanvasRef.current,
+                element: qrRef.current,
                 value: text,
                 size: 200,
-                background: 'transparent',
-                foreground: '#e5e7eb',
-                padding: 10,
+                background: 'white',
+                foreground: 'black',
             });
         }
     }, [text]);
 
-    const downloadQR = () => {
-        if (qrCanvasRef.current && text) {
-            const link = document.createElement('a');
-            link.download = 'qrcode.png';
-            link.href = qrCanvasRef.current.toDataURL('image/png');
-            link.click();
-        }
-    };
-
     return (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`p-5 rounded-2xl ${glassEffectClasses} space-y-4`}>
-            <h3 className="text-xl font-semibold text-cyan-200">Offline QR Code Generator</h3>
-            <textarea value={text} onChange={e => setText(e.target.value)} placeholder="Enter text or URL..." className="w-full p-3 rounded-lg bg-slate-800/60 border border-slate-700" rows={4}></textarea>
-            <div className="flex justify-center items-center bg-slate-800/50 rounded-lg p-4 min-h-[220px]">
-                {text ? <canvas ref={qrCanvasRef}></canvas> : <p className="text-gray-400">QR code will appear here</p>}
-            </div>
-            <button onClick={downloadQR} disabled={!text} className="bg-green-600 disabled:bg-slate-600 px-4 py-2 rounded-md font-semibold">Download QR</button>
-        </motion.div>
-    );
-};
-
-const FileHasher: React.FC = () => {
-    const [fileName, setFileName] = useState('');
-    const [hashes, setHashes] = useState<{ [key: string]: string }>({});
-    const [isHashing, setIsHashing] = useState(false);
-
-    const calculateHashes = async (file: File) => {
-        if (!file) return;
-        setIsHashing(true);
-        setFileName(file.name);
-        setHashes({});
-
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            const buffer = e.target?.result as ArrayBuffer;
-            if (!buffer) return;
-
-            const algorithms = ['MD5', 'SHA-1', 'SHA-256', 'SHA-512'];
-            const calculatedHashes: { [key: string]: string } = {};
-
-            for (const algo of algorithms) {
-                try {
-                    const hashBuffer = await crypto.subtle.digest(algo, buffer);
-                    const hashArray = Array.from(new Uint8Array(hashBuffer));
-                    calculatedHashes[algo] = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-                } catch(err) {
-                    calculatedHashes[algo] = 'Algorithm not supported by browser';
-                }
-                setHashes({ ...calculatedHashes }); // Update state incrementally
-            }
-            setIsHashing(false);
-        };
-        reader.readAsArrayBuffer(file);
-    };
-
-    return (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`p-5 rounded-2xl ${glassEffectClasses} space-y-4`}>
-            <h3 className="text-xl font-semibold text-cyan-200">File Integrity Checker</h3>
-            <label htmlFor="file-upload" className={`w-full block text-center p-6 border-2 border-dashed border-slate-600 rounded-lg cursor-pointer hover:bg-slate-700/50 ${isHashing ? 'animate-pulse' : ''}`}>
-                {isHashing ? 'Calculating...' : (fileName || 'Click or drag file to upload')}
-            </label>
-            <input id="file-upload" type="file" className="hidden" onChange={e => e.target.files && calculateHashes(e.target.files[0])} />
-            {Object.keys(hashes).length > 0 && (
-                <div className="space-y-2 bg-slate-800/50 p-3 rounded-lg">
-                    {Object.entries(hashes).map(([algo, hash]) => (
-                        <div key={algo} className="flex items-center justify-between text-sm">
-                            <span className="font-semibold text-gray-300 w-24">{algo}</span>
-                            <input type="text" readOnly value={hash} className="font-mono bg-slate-900 p-1 rounded w-full" />
-                            <button onClick={() => navigator.clipboard.writeText(hash)} title="Copy" className="ml-2 p-2 rounded-md hover:bg-slate-700">📋</button>
-                        </div>
-                    ))}
+        <motion.div layout className={`p-5 rounded-2xl ${glassEffectClasses} w-full`}>
+            <h3 className="text-xl font-semibold text-indigo-300 mb-4">QR Code Generator</h3>
+            <div className="flex flex-col items-center">
+                <div className="p-2 bg-white rounded-lg inline-block">
+                    <canvas ref={qrRef}></canvas>
                 </div>
-            )}
+                 <input type="text" value={text} onChange={e => setText(e.target.value)} placeholder="Enter URL or text" className="w-full mt-4 p-2 rounded-lg bg-slate-800/60 border border-slate-700 text-white placeholder-gray-400 focus:ring-2 focus:ring-indigo-500"/>
+            </div>
         </motion.div>
     );
 };
@@ -267,17 +402,16 @@ const FileHasher: React.FC = () => {
 export default function App(): React.ReactElement {
   const [input, setInput] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<'analyzer' | 'toolkit'>('analyzer');
   const [history, setHistory] = useState<Analysis[]>(() => {
     try {
       const s = localStorage.getItem("phishHistory");
       return s ? JSON.parse(s) : [];
     } catch (error) {
-      // FIX: The `error` object in a catch block is of type `unknown`. Explicitly convert it to a string to satisfy TypeScript's type checking.
       console.error("Failed to parse history from localStorage", String(error));
       return [];
     }
   });
-  const [activeTab, setActiveTab] = useState('analyzer');
   
   const pieChartRef = useRef<ChartJS | null>(null);
   const barChartRef = useRef<ChartJS | null>(null);
@@ -285,6 +419,8 @@ export default function App(): React.ReactElement {
 
   useEffect(() => {
     localStorage.setItem("phishHistory", JSON.stringify(history));
+    
+    if (activeTab !== 'analyzer') return;
 
     const low = history.filter(h => h.score <= 30).length;
     const medium = history.filter(h => h.score > 30 && h.score <= 60).length;
@@ -306,71 +442,36 @@ export default function App(): React.ReactElement {
       type: "bar", data: { labels: ["Low", "Medium", "High"], datasets: [{ label: 'Number of Analyses', data: [low, medium, high], backgroundColor: ["#22c55e", "#f59e0b", "#ef4444"], borderRadius: 4 }] },
       options: { responsive: true, maintainAspectRatio: false, scales: { x: { ticks: { color: "#d1d5db" }, grid: { display: false } }, y: { ticks: { color: "#d1d5db", stepSize: 1 }, grid: { color: "rgba(255,255,255,0.1)" } } }, plugins: { legend: { display: false } } }
     });
-  }, [history]);
+  }, [history, activeTab]);
 
-  const analyzeText = async () => {
-    if (!input.trim()) return alert("Please enter text or URL to analyze.");
+  const analyzeText = async (textToAnalyze: string) => {
+    if (!textToAnalyze.trim()) return alert("Please enter text or URL to analyze.");
     setIsLoading(true);
 
-    let analysisResult: HeuristicAnalysisResult;
-
-    try {
-        const model = await tf.loadLayersModel('/models/text_model/model.json');
-        const preprocessedInput = await preprocessText(input);
-        const prediction = model.predict(preprocessedInput) as any;
-        const score = prediction.dataSync()[0] * 100;
-        analysisResult = { score, explanation: `[Advanced AI Model] The deep learning model analyzed the text's semantic context and structure to determine its risk profile.` };
-        console.log("Successfully analyzed with Advanced AI Model.");
-    } catch (error) {
-        console.warn("Advanced AI text model not found or failed. Falling back to heuristic engine.", error);
-        analysisResult = performHeuristicAnalysis(input);
-    }
+    const heuristicResult = performAdvancedHeuristicAnalysis(textToAnalyze);
+    const mlResult = runAdvancedMLAnalysis(textToAnalyze);
+    const score = Math.min(100, heuristicResult.score * 0.5 + mlResult.score * 0.5);
     
-    const { score, explanation } = analysisResult;
+    const explanation = generateCombinedExplanation(heuristicResult, mlResult, score);
     const label = score > 60 ? "High Risk 🔴" : score > 30 ? "Medium Risk 🟠" : "Low Risk 🟢";
-    const entry: Analysis = { text: input, score: Math.round(score), label, time: new Date().toLocaleString(), explanation, };
+    
+    const entry: Analysis = { text: textToAnalyze, score: Math.round(score), label, time: new Date().toLocaleString(), explanation, };
     setHistory(prev => [...prev, entry]);
     setInput("");
     setIsLoading(false);
   };
   
-  async function analyzeImageOfflineHybrid(file: File) {
+  async function analyzeImageOffline(file: File) {
       if (!file) return;
       setIsLoading(true);
       alert("🔍 Analyzing image... This may take a moment.");
 
       try {
         const { data } = await Tesseract.recognize(file, "eng");
-        const { score: textScore, explanation: textExplanation } = performHeuristicAnalysis(data.text);
-        
-        let visualScore = 0;
-        let finalExplanation: string;
-
-        try {
-          const img = document.createElement("img");
-          img.src = URL.createObjectURL(file);
-          await new Promise<void>((resolve) => { img.onload = () => resolve(); });
-
-          const model = await tf.loadLayersModel("/models/image_model/model.json");
-          const tensor = preprocessImage(img);
-          const prediction = model.predict(tensor) as any;
-          visualScore = prediction.dataSync()[0] * 100;
-
-          const combinedScore = Math.min((visualScore * 0.6 + textScore * 0.4), 100);
-          finalExplanation = `[Advanced AI Model] Visual analysis detected phishing patterns with ${visualScore.toFixed(0)}% confidence. Text analysis contributed to the final score.`;
-           visualScore = combinedScore;
-        } catch (error) {
-          console.warn("Advanced AI image model not found or failed. Using OCR text analysis only.", error);
-          finalExplanation = textExplanation;
-          visualScore = textScore;
-        }
-        
-        const label = visualScore > 60 ? "High Risk 🔴" : visualScore > 30 ? "Medium Risk 🟠" : "Low Risk 🟢";
-        const entry: Analysis = { text: `[Image Analysis] ${file.name}`, score: Math.round(visualScore), label, time: new Date().toLocaleString(), explanation: finalExplanation };
-        setHistory((prev) => [...prev, entry]);
-        alert(`✅ Offline image analysis complete:\n${label} (${visualScore.toFixed(0)}%)`);
+        await analyzeText(`[Image Analysis of: ${file.name}]\n\n${data.text}`);
+        alert(`✅ Offline image analysis complete.`);
       } catch (error) {
-        console.error("A critical error occurred during image analysis:", error);
+        console.error("A critical error occurred during image analysis:", String(error));
         alert("❌ A critical error occurred during image analysis. Please check the console for details.");
       } finally {
         setIsLoading(false);
@@ -410,126 +511,118 @@ export default function App(): React.ReactElement {
     doc.save("PhishGuard_Report.pdf");
   };
 
-  const renderActiveTab = () => {
-    switch (activeTab) {
-        case 'analyzer':
-            return <PhishingAnalyzerTab />;
-        case 'toolkit':
-            return <SecurityToolkitTab />;
-        default:
-            return null;
-    }
-  };
-
-  const PhishingAnalyzerTab = () => (
-      <motion.div key="analyzer" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-        <main className="grid lg:grid-cols-5 gap-6">
-            <section className={`lg:col-span-3 p-5 rounded-2xl ${glassEffectClasses}`}>
-                <motion.div layout>
-                    <h2 className="text-2xl font-semibold text-cyan-200 mb-4">Analysis Engine</h2>
-                    <textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="Paste suspicious email content, a message, or a URL here..." className="w-full p-3 rounded-lg bg-slate-800/60 border border-slate-700 text-white placeholder-gray-400 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-shadow duration-300" rows={8} disabled={isLoading}/>
-                    <div className="flex flex-wrap gap-3 mt-4 items-center">
-                        <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={analyzeText} disabled={isLoading || !input.trim()} className="bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors px-5 py-2 rounded-lg font-semibold shadow-lg shadow-cyan-500/20">{isLoading ? "Analyzing..." : "Analyze Text"}</motion.button>
-                        <motion.div whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }}>
-                            <label htmlFor="image-upload" className={`bg-indigo-500 hover:bg-indigo-400 transition-colors px-5 py-2 rounded-lg font-semibold shadow-lg shadow-indigo-500/20 block cursor-pointer ${isLoading ? 'bg-slate-600 !cursor-not-allowed' : ''}`}>Upload Image</label>
-                            <input id="image-upload" type="file" accept="image/*" className="hidden" disabled={isLoading} onChange={(e) => { if (e.target.files && e.target.files[0]) { analyzeImageOfflineHybrid(e.target.files[0]); e.target.value = ''; } }}/>
-                        </motion.div>
-                        <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={() => setInput("")} disabled={isLoading} className="bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 transition-colors px-5 py-2 rounded-lg">Clear Input</motion.button>
-                    </div>
-
-                    <AnimatePresence>
-                        {latest && (
-                        <motion.div layout initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6 bg-slate-800/70 p-4 rounded-lg border border-slate-700">
-                            <h3 className="text-lg font-semibold text-gray-200 mb-2">Latest Result</h3>
-                            <div className="space-y-2">
-                            <p className="text-gray-300"><strong>Risk Level:</strong> <span className="ml-2 font-bold">{latest.label}</span></p>
-                            <p className="text-gray-300"><strong>Confidence Score:</strong> <span className="ml-2 font-bold">{latest.score}%</span></p>
-                            {latest.explanation && (
-                                <div>
-                                <p className="text-gray-300"><strong>Reasoning:</strong></p>
-                                <blockquote className="text-gray-300 mt-1 pl-3 border-l-2 border-cyan-400 bg-slate-900/50 p-2 rounded-r-md text-sm">{latest.explanation}</blockquote>
-                                </div>
-                            )}
-                            <p className="text-gray-300 mt-2 break-words bg-slate-900/50 p-2 rounded-md max-h-24 overflow-y-auto text-sm"><span className="font-semibold text-gray-400">Original Content: </span>{latest.text}</p>
-                            </div>
-                            <p className="text-xs text-gray-400 mt-3 text-right">{latest.time}</p>
-                        </motion.div>
-                        )}
-                    </AnimatePresence>
-                </motion.div>
-            </section>
-            <section className={`lg:col-span-2 p-5 rounded-2xl ${glassEffectClasses}`}>
-                <motion.div layout>
-                    <h2 className="text-2xl font-semibold text-cyan-200 mb-4">Dashboard</h2>
-                    <div className="h-52 w-full"><canvas id="pieChart"></canvas></div>
-                    <div className="h-52 w-full mt-4"><canvas id="barChart"></canvas></div>
-                    <div className="flex flex-wrap gap-3 justify-end mt-4">
-                        <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={downloadReport} className="bg-green-600 hover:bg-green-500 transition-colors px-4 py-2 rounded-lg font-semibold shadow-lg shadow-green-500/20">📄 Download PDF</motion.button>
-                        <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={clearHistory} className="bg-red-600 hover:bg-red-500 transition-colors px-4 py-2 rounded-lg font-semibold shadow-lg shadow-red-500/20">🗑️ Clear History</motion.button>
-                    </div>
-                </motion.div>
-            </section>
-        </main>
-        <section className="mt-8">
-          <h3 className="text-2xl font-semibold text-cyan-200 mb-4">Analysis History</h3>
-          <motion.div layout className="grid gap-4">
-            <AnimatePresence>
-              {history.length === 0 ? (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`text-center text-gray-400 p-8 rounded-2xl ${glassEffectClasses}`}>No analysis history. Run an analysis to get started!</motion.div>
-              ) : (
-                history.slice().reverse().map((h, i) => (
-                  <motion.div key={`${h.time}-${i}`} layout initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.3 }} className={`p-4 rounded-lg ${glassEffectClasses}`}>
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <div className="font-semibold text-lg">{h.label} <span className="text-sm text-gray-300">({h.score}%)</span></div>
-                        <div className="text-xs text-gray-400">{h.time}</div>
-                      </div>
-                    </div>
-                    {h.explanation && (<blockquote className="text-gray-300 mt-2 pl-3 border-l-2 border-cyan-400 bg-slate-900/30 p-2 rounded-r-md text-sm">{h.explanation}</blockquote>)}
-                    <p className="text-gray-300 mt-2 break-words text-sm bg-slate-900/20 p-2 rounded-md">{h.text}</p>
-                  </motion.div>
-                ))
-              )}
-            </AnimatePresence>
-          </motion.div>
-        </section>
-    </motion.div>
+  const TabButton: React.FC<{tabId: 'analyzer' | 'toolkit', children: React.ReactNode}> = ({ tabId, children }) => (
+    <button onClick={() => setActiveTab(tabId)} className={`relative px-4 py-2 rounded-md text-sm font-medium transition-colors ${activeTab === tabId ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
+      {children}
+      {activeTab === tabId && <motion.div className="absolute bottom-0 left-0 right-0 h-0.5 bg-cyan-400" layoutId="underline" />}
+    </button>
   );
-
-  const SecurityToolkitTab = () => (
-    <motion.div key="toolkit" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-        <div className="grid md:grid-cols-2 gap-6">
-            <div className="space-y-6">
-                <PasswordToolkit />
-                <QRCodeGenerator />
-            </div>
-            <div>
-                <FileHasher />
-            </div>
-        </div>
-    </motion.div>
-  );
-
 
   return (
     <div className="min-h-screen p-4 sm:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto">
-        <motion.header initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="text-center mb-8">
+        <motion.header initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="text-center mb-6">
           <h1 className="text-4xl md:text-5xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-indigo-500 pb-2">PhishGuard</h1>
           <p className="text-gray-300 mt-2 text-base md:text-lg">Your Powerful Offline Security Suite</p>
         </motion.header>
+
+        <div className="flex justify-center mb-6">
+          <div className={`flex space-x-2 p-1 rounded-lg ${glassEffectClasses}`}>
+              <TabButton tabId="analyzer">Hybrid Analysis Engine</TabButton>
+              <TabButton tabId="toolkit">Security Toolkit</TabButton>
+          </div>
+        </div>
         
-        <nav className="flex justify-center mb-8">
-            <div className={`flex space-x-2 p-1.5 rounded-xl ${glassEffectClasses}`}>
-                <button onClick={() => setActiveTab('analyzer')} className={`${tabButtonClasses} ${activeTab === 'analyzer' ? activeTabClasses : inactiveTabClasses}`}>🛡️ Phishing Analyzer</button>
-                <button onClick={() => setActiveTab('toolkit')} className={`${tabButtonClasses} ${activeTab === 'toolkit' ? activeTabClasses : inactiveTabClasses}`}>🛠️ Security Toolkit</button>
-            </div>
-        </nav>
-
         <AnimatePresence mode="wait">
-            {renderActiveTab()}
-        </AnimatePresence>
+            <motion.div
+                key={activeTab}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+            >
+                {activeTab === 'analyzer' && (
+                    <>
+                        <main className="grid lg:grid-cols-5 gap-6">
+                            <section className={`lg:col-span-3 p-5 rounded-2xl ${glassEffectClasses}`}>
+                                <motion.div layout>
+                                    <h2 className="text-2xl font-semibold text-cyan-200 mb-4">Analyze Content</h2>
+                                    <textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="Paste suspicious email content, a message, or a URL here..." className="w-full p-3 rounded-lg bg-slate-800/60 border border-slate-700 text-white placeholder-gray-400 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-shadow duration-300" rows={8} disabled={isLoading}/>
+                                    <div className="flex flex-wrap gap-3 mt-4 items-center">
+                                        <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={() => analyzeText(input)} disabled={isLoading || !input.trim()} className="bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors px-5 py-2 rounded-lg font-semibold shadow-lg shadow-cyan-500/20">{isLoading ? "Analyzing..." : "Analyze Text"}</motion.button>
+                                        <motion.div whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }}>
+                                            <label htmlFor="image-upload" className={`bg-indigo-500 hover:bg-indigo-400 transition-colors px-5 py-2 rounded-lg font-semibold shadow-lg shadow-indigo-500/20 block cursor-pointer ${isLoading ? 'bg-slate-600 !cursor-not-allowed' : ''}`}>Upload Image</label>
+                                            <input id="image-upload" type="file" accept="image/*" className="hidden" disabled={isLoading} onChange={(e) => { if (e.target.files && e.target.files[0]) { analyzeImageOffline(e.target.files[0]); e.target.value = ''; } }}/>
+                                        </motion.div>
+                                        <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={() => setInput("")} disabled={isLoading} className="bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 transition-colors px-5 py-2 rounded-lg">Clear Input</motion.button>
+                                    </div>
 
+                                    <AnimatePresence>
+                                        {latest && (
+                                        <motion.div layout initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6 bg-slate-800/70 p-4 rounded-lg border border-slate-700">
+                                            <h3 className="text-lg font-semibold text-gray-200 mb-2">Latest Result</h3>
+                                            <div className="space-y-2">
+                                            <p className="text-gray-300"><strong>Risk Level:</strong> <span className="ml-2 font-bold">{latest.label}</span></p>
+                                            <p className="text-gray-300"><strong>Confidence Score:</strong> <span className="ml-2 font-bold">{latest.score}%</span></p>
+                                            {latest.explanation && (
+                                                <div>
+                                                <p className="text-gray-300"><strong>Reasoning:</strong></p>
+                                                <blockquote className="text-gray-300 mt-1 pl-3 border-l-2 border-cyan-400 bg-slate-900/50 p-2 rounded-r-md text-sm whitespace-pre-wrap">{latest.explanation}</blockquote>
+                                                </div>
+                                            )}
+                                            <p className="text-gray-300 mt-2 break-words bg-slate-900/50 p-2 rounded-md max-h-24 overflow-y-auto text-sm"><span className="font-semibold text-gray-400">Original Content: </span>{latest.text}</p>
+                                            </div>
+                                            <p className="text-xs text-gray-400 mt-3 text-right">{latest.time}</p>
+                                        </motion.div>
+                                        )}
+                                    </AnimatePresence>
+                                </motion.div>
+                            </section>
+                            <section className={`lg:col-span-2 p-5 rounded-2xl ${glassEffectClasses}`}>
+                                <motion.div layout>
+                                    <h2 className="text-2xl font-semibold text-cyan-200 mb-4">Dashboard</h2>
+                                    <div className="h-52 w-full"><canvas id="pieChart"></canvas></div>
+                                    <div className="h-52 w-full mt-4"><canvas id="barChart"></canvas></div>
+                                    <div className="flex flex-wrap gap-3 justify-end mt-4">
+                                        <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={downloadReport} className="bg-green-600 hover:bg-green-500 transition-colors px-4 py-2 rounded-lg font-semibold shadow-lg shadow-green-500/20">📄 Download PDF</motion.button>
+                                        <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05, y: -2 }} onClick={clearHistory} className="bg-red-600 hover:bg-red-500 transition-colors px-4 py-2 rounded-lg font-semibold shadow-lg shadow-red-500/20">🗑️ Clear History</motion.button>
+                                    </div>
+                                </motion.div>
+                            </section>
+                        </main>
+                        <section className="mt-8">
+                          <h3 className="text-2xl font-semibold text-cyan-200 mb-4">Analysis History</h3>
+                          <motion.div layout className="grid gap-4">
+                            <AnimatePresence>
+                              {history.length === 0 ? (
+                                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`text-center text-gray-400 p-8 rounded-2xl ${glassEffectClasses}`}>No analysis history. Run an analysis to get started!</motion.div>
+                              ) : (
+                                history.slice().reverse().map((h, i) => (
+                                  <motion.div key={`${h.time}-${i}`} layout initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.3 }} className={`p-4 rounded-lg ${glassEffectClasses}`}>
+                                    <div className="flex justify-between items-start">
+                                      <div>
+                                        <div className="font-semibold text-lg">{h.label} <span className="text-sm text-gray-300">({h.score}%)</span></div>
+                                        <div className="text-xs text-gray-400">{h.time}</div>
+                                      </div>
+                                    </div>
+                                    {h.explanation && (<blockquote className="text-gray-300 mt-2 pl-3 border-l-2 border-cyan-400 bg-slate-900/30 p-2 rounded-r-md text-sm whitespace-pre-wrap">{h.explanation}</blockquote>)}
+                                    <p className="text-gray-300 mt-2 break-words text-sm bg-slate-900/20 p-2 rounded-md">{h.text}</p>
+                                  </motion.div>
+                                ))
+                              )}
+                            </AnimatePresence>
+                          </motion.div>
+                        </section>
+                    </>
+                )}
+                {activeTab === 'toolkit' && (
+                    <main className="grid md:grid-cols-2 gap-6">
+                        <PasswordGenerator />
+                        <QrCodeGenerator />
+                    </main>
+                )}
+            </motion.div>
+        </AnimatePresence>
       </div>
     </div>
   );
