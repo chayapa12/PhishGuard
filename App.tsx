@@ -238,9 +238,57 @@ function generateCombinedExplanation(
 // --- UI & STYLING ---
 const glassEffectClasses = "bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] backdrop-blur-[8px] shadow-[0_6px_18px_rgba(2,6,23,0.6)]";
 
+// --- PASSWORD STRENGTH CALCULATOR ---
+interface PasswordStrength {
+    score: number; // 0-4
+    label: string;
+    colorClass: string;
+    textColor: string;
+}
+
+function calculatePasswordStrength(password: string): PasswordStrength {
+    const strength: PasswordStrength = { score: 0, label: '', colorClass: '', textColor: '' };
+    const labels = ['', 'Weak', 'Medium', 'Strong', 'Very Strong'];
+    const colors = [
+        { class: 'bg-slate-700', text: '#64748b' },    // 0
+        { class: 'bg-red-500', text: '#ef4444' },      // 1
+        { class: 'bg-orange-500', text: '#f97316' },   // 2
+        { class: 'bg-yellow-500', text: '#eab308' },  // 3
+        { class: 'bg-green-500', text: '#22c55e' },    // 4
+    ];
+
+    if (!password) {
+        return { score: 0, label: '', colorClass: colors[0].class, textColor: colors[0].text };
+    }
+
+    let score = 0;
+    const has = {
+        upper: /[A-Z]/.test(password),
+        lower: /[a-z]/.test(password),
+        number: /[0-9]/.test(password),
+        symbol: /[^A-Za-z0-9]/.test(password),
+    };
+    const typesCount = (has.upper ? 1 : 0) + (has.lower ? 1 : 0) + (has.number ? 1 : 0) + (has.symbol ? 1 : 0);
+
+    if (password.length >= 8) score++;
+    if (password.length >= 12) score++;
+    if (typesCount >= 3) score++;
+    if (typesCount === 4) score++;
+    
+    if (password.length > 0 && score === 0) score = 1;
+    
+    strength.score = score;
+    strength.label = labels[score] || 'Strong';
+    strength.colorClass = colors[score]?.class || colors[4].class;
+    strength.textColor = colors[score]?.text || colors[4].text;
+
+    return strength;
+}
+
 // --- SECURITY TOOLKIT COMPONENTS ---
 const PasswordGenerator: React.FC = () => {
     const [password, setPassword] = useState('');
+    const [strength, setStrength] = useState(calculatePasswordStrength(''));
     const [length, setLength] = useState(16);
     const [options, setOptions] = useState({ uppercase: true, numbers: true, symbols: true });
     const [copied, setCopied] = useState(false);
@@ -263,6 +311,7 @@ const PasswordGenerator: React.FC = () => {
 
         if (!charPool) {
             setPassword('Select character types!');
+            setStrength(calculatePasswordStrength(''));
             return;
         }
 
@@ -271,6 +320,7 @@ const PasswordGenerator: React.FC = () => {
             newPassword += charPool.charAt(Math.floor(Math.random() * charPool.length));
         }
         setPassword(newPassword);
+        setStrength(calculatePasswordStrength(newPassword));
     }, [length, options, customChars]);
 
     const generateMemorablePassword = () => {
@@ -309,8 +359,10 @@ const PasswordGenerator: React.FC = () => {
             const randomSymbol = syms.charAt(Math.floor(Math.random() * syms.length));
             passArray.splice(randIndex, 0, randomSymbol);
         }
-    
-        setPassword(passArray.join(''));
+        
+        const finalPassword = passArray.join('');
+        setPassword(finalPassword);
+        setStrength(calculatePasswordStrength(finalPassword));
     };
 
     useEffect(() => {
@@ -327,9 +379,28 @@ const PasswordGenerator: React.FC = () => {
     return (
         <motion.div layout className={`p-5 rounded-2xl ${glassEffectClasses} w-full`}>
             <h3 className="text-xl font-semibold text-indigo-300 mb-4">Secure Password Generator</h3>
-            <div className={`flex items-center p-3 rounded-lg bg-slate-800/60 border border-slate-700 mb-4`}>
+            <div className={`flex items-center p-3 rounded-lg bg-slate-800/60 border border-slate-700 mb-1`}>
                 <span className="font-mono text-lg text-white flex-grow break-all">{password}</span>
                 <button onClick={copyToClipboard} className="ml-4 px-3 py-1 bg-indigo-500 rounded-md text-sm hover:bg-indigo-400 transition-colors">{copied ? 'Copied!' : 'Copy'}</button>
+            </div>
+            <div className="flex items-center gap-2 mb-4 h-6">
+                {password && (
+                    <>
+                        <div className="flex-grow grid grid-cols-4 gap-1.5 h-2">
+                            {Array.from({ length: 4 }).map((_, index) => (
+                                <div
+                                    key={index}
+                                    className={`rounded-full transition-colors duration-300 ${
+                                        strength.score > index ? strength.colorClass : 'bg-slate-700'
+                                    }`}
+                                />
+                            ))}
+                        </div>
+                        <span className="text-sm font-medium w-24 text-right transition-colors duration-300" style={{ color: strength.textColor }}>
+                            {strength.label}
+                        </span>
+                    </>
+                )}
             </div>
             <div className="space-y-4">
                  <div>
