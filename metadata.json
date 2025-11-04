@@ -1,0 +1,5 @@
+{
+  "name": "PhishGuard AI - Offline Phishing Analyzer",
+  "description": "An offline tool to analyze text, emails, messages, or URLs for potential phishing risks. It provides a risk score and visualizations without needing an internet connection or API keys.",
+  "requestFramePermissions": []
+}
