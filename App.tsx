@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import { Chart, ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend, DoughnutController, BarController } from "chart.js";
 import type { Chart as ChartJS } from "chart.js";
@@ -19,7 +20,7 @@ interface Analysis {
   explanation?: string;
 }
 
-// --- ADVANCED HEURISTIC ANALYSIS ENGINE V3 ---
+// --- ADVANCED HEURISTICK ANALYSIS ENGINE V3 ---
 interface AnalysisRule {
   id: string;
   category: 'Urgency' | 'Financial' | 'Authority' | 'Suspicious Links' | 'Generic Greeting' | 'Bad Grammar' | 'Unexpected Reward' | 'Threat' | 'Unexpected Attachment' | 'Psychological Tricks';
@@ -90,8 +91,8 @@ function performAdvancedHeuristicAnalysis(text: string): { score: number; foundF
 }
 
 
-// --- ADVANCED OFFLINE MACHINE LEARNING ENGINE V2 ---
-const mlKeywords: { [key: string]: number } = {
+// --- OFFLINE MACHINE LEARNING ENGINE V1 ---
+const patternKeywords: { [key: string]: number } = {
   // High-risk keywords
   'verify': 0.9, 'password': 0.8, 'username': 0.7, 'ssn': 1.0, 'locked': 0.8, 'suspended': 0.8,
   'unusual': 0.7, 'activity': 0.6, 'login': 0.7, 'confidential': 0.8, 'immediate': 0.8,
@@ -102,24 +103,20 @@ const mlKeywords: { [key: string]: number } = {
   'sincerely': -0.8, 'documentation': -0.6, 'feedback': -0.5, 'reminder': -0.2,
 };
 
-const mlNgrams: { [key: string]: number } = {
+const patternNgrams: { [key: string]: number } = {
   // High-risk phrases
   'verify your': 0.9, 'your account': 0.8, 'account is': 0.6, 'is locked': 0.9, 'action required': 0.8,
   'immediate action': 0.9, 'click here': 0.7, 'update your': 0.7, 'credit card': 0.9,
   'bank account': 0.9, 'dear customer': 0.6, 'social security': 1.0, 'final notice': 0.8
 };
 
-// Simulated model weights for offline inference
-const modelWeights = {
-    keywordScore: 1.2,
-    ngramScore: 1.5,
-    uppercaseRatio: 5.0, // High weight for excessive caps
-    symbolRatio: 3.0,
-    digitRatio: 1.5,
-    bias: -2.0 // Adjusts the activation threshold
+// These weights will be loaded into the actual TF.js model.
+const modelWeightsConfig = {
+    kernel: [1.2, 1.5, 5.0, 3.0, 1.5], // Corresponds to keywordScore, ngramScore, etc.
+    bias: -2.0
 };
 
-interface MLFeatures {
+interface PatternFeatures {
     keywordScore: number;
     ngramScore: number;
     uppercaseRatio: number;
@@ -129,7 +126,7 @@ interface MLFeatures {
     flaggedNgrams: string[];
 }
 
-function extractMLFeatures(text: string): MLFeatures {
+function extractLinguisticFeatures(text: string): PatternFeatures {
     const lowerCaseText = text.toLowerCase();
     const tokens = lowerCaseText.replace(/[.,!?;:"']/g, ' ').split(/\s+/);
     const uniqueTokens = [...new Set(tokens)];
@@ -137,17 +134,17 @@ function extractMLFeatures(text: string): MLFeatures {
     let keywordScore = 0;
     const flaggedWords: string[] = [];
     uniqueTokens.forEach(token => {
-        if (mlKeywords[token]) {
-            keywordScore += mlKeywords[token];
-            if (mlKeywords[token] > 0.6) flaggedWords.push(token);
+        if (patternKeywords[token]) {
+            keywordScore += patternKeywords[token];
+            if (patternKeywords[token] > 0.6) flaggedWords.push(token);
         }
     });
 
     let ngramScore = 0;
     const flaggedNgrams: string[] = [];
-    Object.keys(mlNgrams).forEach(ngram => {
+    Object.keys(patternNgrams).forEach(ngram => {
         if (lowerCaseText.includes(ngram)) {
-            ngramScore += mlNgrams[ngram];
+            ngramScore += patternNgrams[ngram];
             flaggedNgrams.push(ngram);
         }
     });
@@ -160,28 +157,27 @@ function extractMLFeatures(text: string): MLFeatures {
     return { keywordScore, ngramScore, uppercaseRatio, symbolRatio, digitRatio, flaggedWords, flaggedNgrams };
 }
 
-function runAdvancedMLAnalysis(text: string): { score: number; details: MLFeatures } {
-    if (!text) return { score: 0, details: { keywordScore: 0, ngramScore: 0, uppercaseRatio: 0, symbolRatio: 0, digitRatio: 0, flaggedWords: [], flaggedNgrams: [] } };
+// FIX: Cannot find namespace 'tf'. Replaced tf.Sequential with any.
+function runMlAnalysis(text: string, model: any | null): { score: number; details: PatternFeatures } {
+    const defaultReturn = { score: 0, details: { keywordScore: 0, ngramScore: 0, uppercaseRatio: 0, symbolRatio: 0, digitRatio: 0, flaggedWords: [], flaggedNgrams: [] } };
+    if (!text || !model) return defaultReturn;
     
-    const features = extractMLFeatures(text);
+    const features = extractLinguisticFeatures(text);
 
-    // Simulated Linear Model + Sigmoid Activation
-    const logit = (features.keywordScore * modelWeights.keywordScore) +
-                  (features.ngramScore * modelWeights.ngramScore) +
-                  (features.uppercaseRatio * modelWeights.uppercaseRatio) +
-                  (features.symbolRatio * modelWeights.symbolRatio) +
-                  (features.digitRatio * modelWeights.digitRatio) +
-                  modelWeights.bias;
-    
-    const probability = 1 / (1 + Math.exp(-logit));
-    const score = probability * 100;
+    const score = tf.tidy(() => {
+        const featureVector = [features.keywordScore, features.ngramScore, features.uppercaseRatio, features.symbolRatio, features.digitRatio];
+        const inputTensor = tf.tensor2d([featureVector], [1, 5]);
+        // FIX: Cannot find namespace 'tf'. Replaced tf.Tensor with any.
+        const prediction = model.predict(inputTensor) as any;
+        return prediction.dataSync()[0] * 100;
+    });
     
     return { score: Math.min(score, 100), details: features };
 }
 
 function generateCombinedExplanation(
     heuristicResult: { score: number; foundFlags: { reason: string; category: string; id: string }[] },
-    mlResult: { score: number; details: MLFeatures },
+    mlResult: { score: number; details: PatternFeatures },
     finalScore: number
 ): string {
     if (finalScore < 5) {
@@ -205,20 +201,20 @@ function generateCombinedExplanation(
         });
     }
 
-    const mlDetails = mlResult.details;
-    if (mlDetails.flaggedWords.length > 0 || mlDetails.flaggedNgrams.length > 0 || mlResult.score > 20) {
-        explanation += "\nMachine Learning Analysis (Linguistic & Structural Cues):\n";
-        if (mlDetails.flaggedNgrams.length > 0) {
-            explanation += `  - Detected suspicious phrases: ${mlDetails.flaggedNgrams.slice(0, 3).join(', ')}.\n`;
+    const patternDetails = mlResult.details;
+    if (patternDetails.flaggedWords.length > 0 || patternDetails.flaggedNgrams.length > 0 || mlResult.score > 20) {
+        explanation += "\nMachine Learning Analysis (Offline Model):\n";
+        if (patternDetails.flaggedNgrams.length > 0) {
+            explanation += `  - Detected suspicious phrases: ${patternDetails.flaggedNgrams.slice(0, 3).join(', ')}.\n`;
         }
-        if (mlDetails.flaggedWords.length > 0) {
-            explanation += `  - Identified high-risk keywords: ${mlDetails.flaggedWords.slice(0, 4).join(', ')}.\n`;
+        if (patternDetails.flaggedWords.length > 0) {
+            explanation += `  - Identified high-risk keywords: ${patternDetails.flaggedWords.slice(0, 4).join(', ')}.\n`;
         }
-        if (mlDetails.uppercaseRatio > 0.1) {
-            explanation += `  - Noticed an unusually high amount of capital letters, a common tactic to create false urgency.\n`;
+        if (patternDetails.uppercaseRatio > 0.1) {
+            explanation += `  - Model identified an unusually high amount of capital letters, a common tactic to create false urgency.\n`;
         }
-        if (mlDetails.symbolRatio > 0.05) {
-            explanation += `  - Detected an unusual density of symbols, which can be used to obscure text.\n`;
+        if (patternDetails.symbolRatio > 0.05) {
+            explanation += `  - Model detected an unusual density of symbols, which can be used to obscure text.\n`;
         }
     }
     
@@ -474,6 +470,8 @@ export default function App(): React.ReactElement {
   const [input, setInput] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'analyzer' | 'toolkit'>('analyzer');
+  // FIX: Cannot find namespace 'tf'. Replaced tf.Sequential with any.
+  const [mlModel, setMlModel] = useState<any | null>(null);
   const [history, setHistory] = useState<Analysis[]>(() => {
     try {
       const s = localStorage.getItem("phishHistory");
@@ -487,6 +485,36 @@ export default function App(): React.ReactElement {
   const pieChartRef = useRef<ChartJS | null>(null);
   const barChartRef = useRef<ChartJS | null>(null);
   const latest = history.length > 0 ? history[history.length - 1] : null;
+
+  useEffect(() => {
+    // Initialize the offline ML model on component mount
+    const createAndLoadModel = () => {
+        if (typeof tf === 'undefined') {
+            console.error("TensorFlow.js not loaded");
+            return;
+        }
+        
+        // 1. Create a simple sequential model
+        const model = tf.sequential();
+        model.add(tf.layers.dense({
+            inputShape: [5], // 5 input features
+            units: 1,        // 1 output score
+            activation: 'sigmoid'
+        }));
+
+        // 2. Set the "pre-trained" weights
+        const weights = [
+            tf.tensor2d(modelWeightsConfig.kernel, [5, 1]), // Kernel (feature weights)
+            tf.tensor1d([modelWeightsConfig.bias])           // Bias
+        ];
+        model.setWeights(weights);
+        
+        setMlModel(model);
+        console.log("Offline ML Model created and loaded.");
+    };
+    
+    createAndLoadModel();
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("phishHistory", JSON.stringify(history));
@@ -517,10 +545,11 @@ export default function App(): React.ReactElement {
 
   const analyzeText = async (textToAnalyze: string) => {
     if (!textToAnalyze.trim()) return alert("Please enter text or URL to analyze.");
+    if (!mlModel) return alert("ML Model is not ready yet, please wait a moment.");
     setIsLoading(true);
 
     const heuristicResult = performAdvancedHeuristicAnalysis(textToAnalyze);
-    const mlResult = runAdvancedMLAnalysis(textToAnalyze);
+    const mlResult = runMlAnalysis(textToAnalyze, mlModel);
     const score = Math.min(100, heuristicResult.score * 0.5 + mlResult.score * 0.5);
     
     const explanation = generateCombinedExplanation(heuristicResult, mlResult, score);
@@ -677,7 +706,7 @@ export default function App(): React.ReactElement {
                                       </div>
                                     </div>
                                     {h.explanation && (<blockquote className="text-gray-300 mt-2 pl-3 border-l-2 border-cyan-400 bg-slate-900/30 p-2 rounded-r-md text-sm whitespace-pre-wrap">{h.explanation}</blockquote>)}
-                                    <p className="text-gray-300 mt-2 break-words text-sm bg-slate-900/20 p-2 rounded-md">{h.text}</p>
+                                    <p className="text-gray-300 mt-2 break-words bg-slate-900/30 p-2 rounded-md max-h-24 overflow-y-auto text-sm"><span className="font-semibold text-gray-400">Original Content: </span>{h.text}</p>
                                   </motion.div>
                                 ))
                               )}
@@ -687,10 +716,10 @@ export default function App(): React.ReactElement {
                     </>
                 )}
                 {activeTab === 'toolkit' && (
-                    <main className="grid md:grid-cols-2 gap-6">
+                    <motion.div className="grid md:grid-cols-2 gap-6">
                         <PasswordGenerator />
                         <QrCodeGenerator />
-                    </main>
+                    </motion.div>
                 )}
             </motion.div>
         </AnimatePresence>
